@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
@@ -39,80 +39,29 @@ def safe_int(x, default=0) -> int:
         return default
 
 
-# =========================
-# External APIs
-# =========================
-def get_weather(city: str, api_key: str) -> Optional[Dict]:
+def get_cat_image(api_key: str) -> Optional[Dict]:
     """
-    OpenWeatherMap 현재 날씨 호출.
-    - 한국어(lang=kr), 섭씨(units=metric)
+    The Cat API 랜덤 고양이 이미지 가져오기.
     - 실패 시 None 반환
     - timeout=10
     """
     if not api_key:
         return None
 
-    url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {
-        "q": city,
-        "appid": api_key,
-        "lang": "kr",
-        "units": "metric",
-    }
+    url = "https://api.thecatapi.com/v1/images/search"
+    headers = {"x-api-key": api_key}
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
             return None
         data = r.json()
-        # 필요한 필드만 정리
-        weather_main = (data.get("weather") or [{}])[0]
-        return {
-            "city": data.get("name", city),
-            "desc": weather_main.get("description"),
-            "temp_c": (data.get("main") or {}).get("temp"),
-            "feels_like_c": (data.get("main") or {}).get("feels_like"),
-            "humidity": (data.get("main") or {}).get("humidity"),
-            "wind_mps": (data.get("wind") or {}).get("speed"),
-        }
-    except Exception:
-        return None
-
-
-def _breed_from_dog_ceo_image_url(image_url: str) -> Optional[str]:
-    """
-    Dog CEO 이미지 URL에서 품종 추출.
-    예: https://images.dog.ceo/breeds/hound-afghan/n02088094_1003.jpg
-        -> hound afghan
-    """
-    try:
-        if "/breeds/" not in image_url:
+        if not data or not isinstance(data, list):
             return None
-        part = image_url.split("/breeds/")[1].split("/")[0]  # hound-afghan
-        part = part.replace("-", " ").strip()
-        return part or None
-    except Exception:
-        return None
-
-
-def get_dog_image() -> Optional[Dict]:
-    """
-    Dog CEO 랜덤 강아지 이미지 URL + 품종 가져오기.
-    - 실패 시 None 반환
-    - timeout=10
-    """
-    url = "https://dog.ceo/api/breeds/image/random"
-    try:
-        r = requests.get(url, timeout=10)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        if data.get("status") != "success":
-            return None
-        image_url = data.get("message")
+        cat = data[0] or {}
+        image_url = cat.get("url")
         if not image_url:
             return None
-        breed = _breed_from_dog_ceo_image_url(image_url)
-        return {"image_url": image_url, "breed": breed}
+        return {"image_url": image_url, "id": cat.get("id")}
     except Exception:
         return None
 
@@ -147,9 +96,6 @@ REPORT_FORMAT_INSTRUCTION = """아래 형식 그대로 한국어로 출력해라
 - 아쉬운 점: (2~4줄)
 - 한 가지 핵심 병목: (1줄)
 
-[날씨 코멘트]
-- (1~2줄, 도시와 체감 온도/기분을 연결)
-
 [내일 미션]
 1) (구체적이고 작은 행동)
 2) (구체적이고 작은 행동)
@@ -163,14 +109,12 @@ REPORT_FORMAT_INSTRUCTION = """아래 형식 그대로 한국어로 출력해라
 def generate_report(
     openai_api_key: str,
     coach_style: str,
-    city: str,
     mood: int,
     habits: Dict[str, bool],
-    weather: Optional[Dict],
-    dog: Optional[Dict],
+    cat: Optional[Dict],
 ) -> Optional[str]:
     """
-    습관+기분+날씨+강아지 품종을 모아서 OpenAI에 전달해 리포트 생성.
+    습관+기분+고양이 정보를 모아서 OpenAI에 전달해 리포트 생성.
     - 실패 시 None
     - 모델: gpt-5-mini
     """
@@ -187,20 +131,9 @@ def generate_report(
         habit_lines.append(f"- {k}: {'완료' if v else '미완료'}")
     habits_text = "\n".join(habit_lines)
 
-    weather_text = "날씨 정보 없음"
-    if weather:
-        weather_text = (
-            f"도시: {weather.get('city')}\n"
-            f"날씨: {weather.get('desc')}\n"
-            f"기온(°C): {weather.get('temp_c')}\n"
-            f"체감(°C): {weather.get('feels_like_c')}\n"
-            f"습도(%): {weather.get('humidity')}\n"
-            f"바람(m/s): {weather.get('wind_mps')}"
-        )
-
-    dog_text = "강아지 정보 없음"
-    if dog:
-        dog_text = f"강아지 품종(추정): {dog.get('breed') or '알 수 없음'}"
+    cat_text = "고양이 정보 없음"
+    if cat:
+        cat_text = f"고양이 이미지 ID: {cat.get('id') or '알 수 없음'}"
 
     user_prompt = f"""오늘 체크인 데이터다.
 
@@ -209,11 +142,8 @@ def generate_report(
 [습관]
 {habits_text}
 
-[날씨]
-{weather_text}
-
-[강아지]
-{dog_text}
+[고양이]
+{cat_text}
 
 요청:
 - 위 데이터만 바탕으로 코칭 리포트를 작성해라.
@@ -274,11 +204,9 @@ if "history" not in st.session_state:
 if "last_report" not in st.session_state:
     st.session_state.last_report = None
 
-if "last_weather" not in st.session_state:
-    st.session_state.last_weather = None
 
-if "last_dog" not in st.session_state:
-    st.session_state.last_dog = None
+if "last_cat" not in st.session_state:
+    st.session_state.last_cat = None
 
 
 # =========================
@@ -286,7 +214,7 @@ if "last_dog" not in st.session_state:
 # =========================
 st.sidebar.header("🔑 API 키")
 openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password", placeholder="sk-...")
-owm_api_key = st.sidebar.text_input("OpenWeatherMap API Key", type="password", placeholder="...")
+cat_api_key = st.sidebar.text_input("The Cat API Key", type="password", placeholder="..." )
 
 st.sidebar.caption("키는 로컬 세션에만 입력되고, 저장은 하지 않도록 구성했다.")
 
@@ -300,48 +228,38 @@ st.caption("오늘의 체크인을 남기고, AI 코치 리포트를 받아보�
 # --- 체크인 UI ---
 st.subheader("✅ 오늘의 습관 체크인")
 
-HABITS = [
-    ("🌤️ 기상 미션", "기상 미션"),
-    ("💧 물 마시기", "물 마시기"),
-    ("📚 공부/독서", "공부/독서"),
-    ("🏃 운동하기", "운동하기"),
-    ("😴 수면", "수면"),
-]
+if "habit_names" not in st.session_state:
+    st.session_state.habit_names = ["물 마시기", "공부/독서", "운동하기", "수면"]
+
+habit_df = pd.DataFrame({"습관": st.session_state.habit_names})
+edited_habits = st.data_editor(
+    habit_df,
+    num_rows="dynamic",
+    hide_index=True,
+    use_container_width=True,
+    column_config={"습관": st.column_config.TextColumn("지키고 싶은 습관", required=True)},
+)
+habit_names = [h.strip() for h in edited_habits["습관"].tolist() if isinstance(h, str) and h.strip()]
+if not habit_names:
+    habit_names = ["물 마시기"]
+st.session_state.habit_names = habit_names
 
 col_a, col_b = st.columns(2, gap="large")
 habit_values: Dict[str, bool] = {}
-
-with col_a:
-    habit_values["기상 미션"] = st.checkbox("🌤️ 기상 미션", value=False)
-    habit_values["물 마시기"] = st.checkbox("💧 물 마시기", value=False)
-    habit_values["공부/독서"] = st.checkbox("📚 공부/독서", value=False)
-
-with col_b:
-    habit_values["운동하기"] = st.checkbox("🏃 운동하기", value=False)
-    habit_values["수면"] = st.checkbox("😴 수면", value=False)
+for idx, habit_name in enumerate(habit_names):
+    target_col = col_a if idx % 2 == 0 else col_b
+    with target_col:
+        habit_values[habit_name] = st.checkbox(habit_name, value=False)
 
 mood = st.slider("🙂 오늘 기분 점수", min_value=1, max_value=10, value=7)
 
-city_list = [
-    "Seoul",
-    "Busan",
-    "Incheon",
-    "Daegu",
-    "Daejeon",
-    "Gwangju",
-    "Ulsan",
-    "Suwon",
-    "Jeju",
-    "Gangneung",
-]
-c1, c2 = st.columns([1, 1], gap="large")
+c1 = st.columns([1], gap="large")[0]
 with c1:
-    city = st.selectbox("🏙️ 도시 선택", city_list, index=0)
-with c2:
     coach_style = st.radio("🎭 코치 스타일", ["스파르타 코치", "따뜻한 멘토", "게임 마스터"], horizontal=True)
 
 done_count = sum(1 for v in habit_values.values() if v)
-achievement_pct = round(done_count / 5 * 100, 0)
+total_habits = max(1, len(habit_names))
+achievement_pct = round(done_count / total_habits * 100, 0)
 
 
 # --- Metrics ---
@@ -352,7 +270,7 @@ mcol1, mcol2, mcol3 = st.columns(3, gap="large")
 with mcol1:
     st.metric("달성률", f"{int(achievement_pct)}%")
 with mcol2:
-    st.metric("달성 습관", f"{done_count}/5")
+    st.metric("달성 습관", f"{done_count}/{total_habits}")
 with mcol3:
     st.metric("기분", f"{mood}/10")
 
@@ -420,47 +338,30 @@ st.subheader("🤖 AI 코치 리포트")
 btn = st.button("컨디션 리포트 생성", type="primary", use_container_width=True)
 
 if btn:
-    with st.spinner("날씨/강아지/AI 리포트를 불러오는 중이다..."):
-        weather = get_weather(city=city, api_key=owm_api_key)
-        dog = get_dog_image()
+    with st.spinner("고양이/AI 리포트를 불러오는 중이다..."):
+        cat = get_cat_image(api_key=cat_api_key)
         report = generate_report(
             openai_api_key=openai_api_key,
             coach_style=coach_style,
-            city=city,
             mood=mood,
             habits=habit_values,
-            weather=weather,
-            dog=dog,
+            cat=cat,
         )
-
-        st.session_state.last_weather = weather
-        st.session_state.last_dog = dog
+        st.session_state.last_cat = cat
         st.session_state.last_report = report
 
 # --- Display results ---
-weather = st.session_state.last_weather
-dog = st.session_state.last_dog
+cat = st.session_state.last_cat
 report = st.session_state.last_report
 
-rcol1, rcol2 = st.columns(2, gap="large")
-
-with rcol1:
-    st.markdown("### 🌦️ 오늘의 날씨")
-    if weather:
-        st.write(f"**도시:** {weather.get('city')}")
-        st.write(f"**날씨:** {weather.get('desc')}")
-        st.write(f"**기온:** {weather.get('temp_c')}°C / **체감:** {weather.get('feels_like_c')}°C")
-        st.write(f"**습도:** {weather.get('humidity')}% / **바람:** {weather.get('wind_mps')} m/s")
-    else:
-        st.info("날씨 정보를 가져오지 못했다. (OpenWeatherMap 키/도시/네트워크를 확인해봐라.)")
-
+rcol2 = st.columns(1, gap="large")[0]
 with rcol2:
-    st.markdown("### 🐶 오늘의 강아지")
-    if dog and dog.get("image_url"):
-        caption = f"품종(추정): {dog.get('breed') or '알 수 없음'}"
-        st.image(dog["image_url"], caption=caption, use_container_width=True)
+    st.markdown("### 🐱 오늘의 고양이")
+    if cat and cat.get("image_url"):
+        caption = f"이미지 ID: {cat.get('id') or '알 수 없음'}"
+        st.image(cat["image_url"], caption=caption, use_container_width=True)
     else:
-        st.info("강아지 이미지를 가져오지 못했다. (Dog CEO API 응답 실패)")
+        st.info("고양이 이미지를 가져오지 못했다. (The Cat API 키/응답을 확인해봐라.)")
 
 st.markdown("### 📝 리포트")
 if report:
@@ -472,17 +373,14 @@ else:
 st.markdown("### 📎 공유용 텍스트")
 share_lines = [
     f"📊 AI 습관 트래커 ({_today_str()})",
-    f"도시: {city} / 코치: {coach_style}",
-    f"달성률: {int(achievement_pct)}% ({done_count}/5) / 기분: {mood}/10",
+    f"코치: {coach_style}",
+    f"달성률: {int(achievement_pct)}% ({done_count}/{total_habits}) / 기분: {mood}/10",
     "습관 체크:",
 ]
-for name in ["기상 미션", "물 마시기", "공부/독서", "운동하기", "수면"]:
+for name in habit_names:
     share_lines.append(f"- {name}: {'✅' if habit_values.get(name) else '⬜'}")
-
-if weather:
-    share_lines.append(f"날씨: {weather.get('desc')} / 체감 {weather.get('feels_like_c')}°C")
-if dog:
-    share_lines.append(f"강아지(추정 품종): {dog.get('breed') or '알 수 없음'}")
+if cat:
+    share_lines.append(f"고양이 이미지 ID: {cat.get('id') or '알 수 없음'}")
 
 if report:
     share_lines.append("\n--- AI 코치 한줄 요약 ---")
@@ -504,12 +402,57 @@ with st.expander("🔎 API 안내"):
     st.markdown(
         """
 - **OpenAI API Key**: AI 코치 리포트 생성에 필요하다. (모델: `gpt-5-mini`)
-- **OpenWeatherMap API Key**: 도시 날씨를 한국어/섭씨로 가져온다.
-- **Dog CEO API**: 랜덤 강아지 사진을 가져온다. (키 필요 없음)
+- **The Cat API Key**: 랜덤 고양이 사진을 가져오는데 필요하다.
 
 문제 생기면 아래를 먼저 확인하면 된다.
 1) 키를 제대로 붙여넣었는지 (공백/줄바꿈 포함 여부)
 2) `pip install openai requests pandas` 설치가 되었는지
-3) 도시 이름이 OpenWeatherMap에서 인식되는지
+3) 네트워크 상태가 정상인지
 """
     )
+
+
+# =========================
+# Calendar + stamp
+# =========================
+st.divider()
+st.subheader("📅 월간 달성 캘린더")
+
+today = dt.date.today()
+first_day = today.replace(day=1)
+next_month = (first_day.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
+last_day = next_month - dt.timedelta(days=1)
+
+history_map = {row["date"]: row for row in st.session_state.history}
+
+st.markdown(
+    """
+    <style>
+    .calendar-grid {display:grid;grid-template-columns:repeat(7,1fr);gap:8px;}
+    .calendar-cell {min-height:64px;border:1px solid #e5e7eb;border-radius:10px;padding:6px;background:#fff;position:relative;}
+    .calendar-cell.empty {background:#f9fafb;border-style:dashed;}
+    .day-num {font-size:12px;font-weight:600;color:#374151;}
+    .stamp {position:absolute;right:5px;bottom:4px;font-size:36px;font-weight:700;line-height:1;opacity:0.98;filter: drop-shadow(0 1px 1px rgba(0,0,0,0.15));}
+    .weekday {font-size:12px;text-align:center;color:#6b7280;font-weight:600;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+week_labels = ["월", "화", "수", "목", "금", "토", "일"]
+header_html = "".join([f"<div class='weekday'>{d}</div>" for d in week_labels])
+
+cells_html = []
+for _ in range(first_day.weekday()):
+    cells_html.append("<div class='calendar-cell empty'></div>")
+
+for day in range(1, last_day.day + 1):
+    d = first_day.replace(day=day)
+    key = d.isoformat()
+    row = history_map.get(key)
+    stamp = ""
+    if row and safe_int(row.get("achievement_pct", 0), 0) == 100:
+        stamp = "<div class='stamp'>💯</div>"
+    cells_html.append(f"<div class='calendar-cell'><div class='day-num'>{day}</div>{stamp}</div>")
+
+st.markdown(f"<div class='calendar-grid'>{header_html}{''.join(cells_html)}</div>", unsafe_allow_html=True)
